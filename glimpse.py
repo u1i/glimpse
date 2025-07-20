@@ -8,35 +8,58 @@ import sys
 import base64
 import json
 import argparse
+import configparser
 from pathlib import Path
 from typing import Optional
 
 import requests
-from dotenv import load_dotenv
 from PIL import Image
 
 
-def load_env_variables():
-    """Load environment variables from .env file."""
-    load_dotenv()
+def load_config():
+    """Load configuration from $HOME/.glimpse_cfg file."""
+    config_path = os.path.expanduser("~/.glimpse_cfg")
+    config = configparser.ConfigParser()
     
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    model = os.getenv("OPENROUTER_LLM")
-    temperature = os.getenv("OPENROUTER_TEMPERATURE")
+    # Default values
+    default_model = "google/gemini-2.5-flash"
+    default_temperature = 0.4
     
-    if not api_key or not model:
-        print("Error: Missing required environment variables in .env file.", file=sys.stderr)
-        print("Please ensure OPENROUTER_API_KEY and OPENROUTER_LLM are set.", file=sys.stderr)
+    # Config file existence is already checked in main()
+    try:
+        config.read(config_path)
+        
+        # Get API key (required)
+        if 'openrouter' in config and 'api_key' in config['openrouter']:
+            api_key = config['openrouter']['api_key']
+        else:
+            print("Error: Missing 'api_key' in [openrouter] section of config file.", file=sys.stderr)
+            print("Please add your OpenRouter API key to ~/.glimpse_cfg", file=sys.stderr)
+            sys.exit(1)
+            
+        # Get model (optional, use default if not specified)
+        if 'openrouter' in config and 'model' in config['openrouter']:
+            model = config['openrouter']['model']
+        else:
+            model = default_model
+            print(f"Notice: Using default model: {default_model}", file=sys.stderr)
+        
+        # Get temperature (optional, use default if not specified)
+        if 'openrouter' in config and 'temperature' in config['openrouter']:
+            try:
+                temperature = float(config['openrouter']['temperature'])
+            except ValueError:
+                print(f"Warning: Invalid temperature value in config. Using default: {default_temperature}", file=sys.stderr)
+                temperature = default_temperature
+        else:
+            temperature = default_temperature
+            
+    except Exception as e:
+        print(f"Error reading config file: {e}", file=sys.stderr)
+        print("Please ensure the file has the correct format:", file=sys.stderr)
+        print("[openrouter]\napi_key = your_api_key_here", file=sys.stderr)
         sys.exit(1)
-    
-    # Convert temperature to float if provided, otherwise use default
-    if temperature is not None:
-        try:
-            temperature = float(temperature)
-        except ValueError:
-            print(f"Warning: Invalid OPENROUTER_TEMPERATURE value: {temperature}. Using default.", file=sys.stderr)
-            temperature = None
-    
+        
     return api_key, model, temperature
 
 
@@ -96,6 +119,16 @@ def analyze_image(image_path: str, prompt: str, api_key: str, model: str, temper
 
 def main():
     """Main function to handle command line arguments and process the image."""
+    # Check if config file exists before parsing arguments
+    config_path = os.path.expanduser("~/.glimpse_cfg")
+    if not os.path.exists(config_path):
+        print(f"Error: Config file not found at {config_path}", file=sys.stderr)
+        print("\nPlease create a config file with your OpenRouter API key:", file=sys.stderr)
+        print("\n[openrouter]\napi_key = your_api_key_here\n", file=sys.stderr)
+        print("Optional settings:\nmodel = google/gemini-2.5-flash\ntemperature = 0.4\n", file=sys.stderr)
+        print("Run 'glimpse.py --help' for more information on command-line options.", file=sys.stderr)
+        sys.exit(1)
+        
     parser = argparse.ArgumentParser(description="Analyze images using OpenRouter API.")
     parser.add_argument(
         "image_path", 
@@ -113,7 +146,13 @@ def main():
         "--model",
         "-m",
         type=str,
-        help="Override the default model specified in .env (e.g., 'mistralai/mistral-medium-3', 'openai/o4-mini')"
+        help="Override the default model specified in config (e.g., 'mistralai/mistral-medium-3', 'openai/o4-mini')"
+    )
+    parser.add_argument(
+        "--temperature",
+        "-t",
+        type=float,
+        help="Override the temperature value from config (0.0 to 1.0, lower is more deterministic)"
     )
     
     args = parser.parse_args()
@@ -129,11 +168,14 @@ def main():
         print(f"Error: Unsupported image format. Please use JPG or PNG.", file=sys.stderr)
         sys.exit(1)
     
-    # Load environment variables
-    api_key, env_model, temperature = load_env_variables()
+    # Load configuration
+    api_key, config_model, config_temperature = load_config()
     
-    # Use command-line model if provided, otherwise use the one from .env
-    model = args.model if args.model else env_model
+    # Use command-line model if provided, otherwise use the one from config
+    model = args.model if args.model else config_model
+    
+    # Use command-line temperature if provided, otherwise use the one from config
+    temperature = args.temperature if args.temperature is not None else config_temperature
     
     # Analyze the image (silently)
     result = analyze_image(args.image_path, args.prompt, api_key, model, temperature)
