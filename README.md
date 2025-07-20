@@ -39,6 +39,16 @@ With a custom prompt:
 ./glimpse.py path/to/image.png --prompt "Identify all objects in this image"
 ```
 
+Override the model (instead of using the one from .env):
+```
+./glimpse.py path/to/image.jpg --model mistralai/mistral-medium-3
+```
+
+Combining options:
+```
+./glimpse.py path/to/image.jpg -m openai/o4-mini -p "What brand is this?"
+```
+
 Or using the short form:
 ```
 ./glimpse.py path/to/image.jpg -p "What's happening in this scene?"

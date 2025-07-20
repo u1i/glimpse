@@ -109,6 +109,12 @@ def main():
         default="Describe what you see in the image",
         help="Prompt to send with the image (default: 'Describe what you see in the image')"
     )
+    parser.add_argument(
+        "--model",
+        "-m",
+        type=str,
+        help="Override the default model specified in .env (e.g., 'mistralai/mistral-medium-3', 'openai/o4-mini')"
+    )
     
     args = parser.parse_args()
     
@@ -124,7 +130,10 @@ def main():
         sys.exit(1)
     
     # Load environment variables
-    api_key, model, temperature = load_env_variables()
+    api_key, env_model, temperature = load_env_variables()
+    
+    # Use command-line model if provided, otherwise use the one from .env
+    model = args.model if args.model else env_model
     
     # Analyze the image (silently)
     result = analyze_image(args.image_path, args.prompt, api_key, model, temperature)
