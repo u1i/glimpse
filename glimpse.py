@@ -79,7 +79,9 @@ def analyze_image(image_path: str, prompt: str, api_key: str, model: str, temper
     
     headers = {
         "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "X-Title": "glimpse",
+        "HTTP-Referer": "https://github.com/u1i/glimpse"
     }
     
     payload = {
