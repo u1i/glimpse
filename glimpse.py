@@ -9,6 +9,8 @@ import base64
 import json
 import argparse
 import configparser
+import time
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -119,21 +121,143 @@ def analyze_image(image_path: str, prompt: str, api_key: str, model: str, temper
         sys.exit(1)
 
 
+def get_cache_file_path():
+    """Get the path for the models cache file."""
+    return os.path.join(tempfile.gettempdir(), 'glimpse_models_cache.json')
+
+
+def is_cache_valid(cache_file_path, max_age_hours=6):
+    """Check if the cache file exists and is not older than max_age_hours."""
+    if not os.path.exists(cache_file_path):
+        return False
+    
+    file_age = time.time() - os.path.getmtime(cache_file_path)
+    max_age_seconds = max_age_hours * 3600
+    return file_age < max_age_seconds
+
+
+def load_models_from_cache(cache_file_path):
+    """Load models data from cache file."""
+    try:
+        with open(cache_file_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return None
+
+
+def save_models_to_cache(models_data, cache_file_path):
+    """Save models data to cache file."""
+    try:
+        with open(cache_file_path, 'w', encoding='utf-8') as f:
+            json.dump(models_data, f)
+    except IOError:
+        # If we can't write to cache, just continue without caching
+        pass
+
+
+def fetch_models_data():
+    """Fetch models data from API or cache."""
+    cache_file_path = get_cache_file_path()
+    
+    # Try to load from cache first
+    if is_cache_valid(cache_file_path):
+        cached_data = load_models_from_cache(cache_file_path)
+        if cached_data is not None:
+            return cached_data
+    
+    # Cache miss or invalid - fetch from API
+    try:
+        response = requests.get("https://openrouter.ai/api/v1/models")
+        response.raise_for_status()
+        
+        models_data = response.json()
+        
+        # Save to cache
+        save_models_to_cache(models_data, cache_file_path)
+        
+        return models_data
+        
+    except requests.exceptions.RequestException as e:
+        # If API fails, try to load from cache even if expired
+        cached_data = load_models_from_cache(cache_file_path)
+        if cached_data is not None:
+            print(f"Warning: API request failed, using cached data: {e}", file=sys.stderr)
+            return cached_data
+        else:
+            raise e
+
+
+def list_models(detailed=True):
+    """List all available OpenRouter models that support image input."""
+    try:
+        models_data = fetch_models_data()
+        
+        if 'data' in models_data:
+            models = models_data['data']
+        else:
+            models = models_data  # Fallback if response format is different
+        
+        # Filter models that support image input
+        image_models = []
+        for model in models:
+            architecture = model.get('architecture', {})
+            modalities = architecture.get('input_modalities', [])
+            if 'image' in modalities:
+                image_models.append(model)
+        
+        if detailed:
+            print(f"Available OpenRouter Models with Image Support ({len(image_models)} total):")
+            print("=" * 70)
+            
+            for model in image_models:
+                model_id = model.get('id', 'Unknown')
+                name = model.get('name', 'Unknown')
+                context_length = model.get('context_length', 'Unknown')
+                
+                # Get pricing info
+                pricing = model.get('pricing', {})
+                prompt_price = pricing.get('prompt', '0')
+                completion_price = pricing.get('completion', '0')
+                
+                # Format pricing (convert to more readable format)
+                try:
+                    prompt_cost = f"${float(prompt_price) * 1000:.4f}/1K"
+                    completion_cost = f"${float(completion_price) * 1000:.4f}/1K"
+                except (ValueError, TypeError):
+                    prompt_cost = "N/A"
+                    completion_cost = "N/A"
+                
+                print(f"ID: {model_id}")
+                print(f"Name: {name}")
+                print(f"Context: {context_length} tokens")
+                print(f"Pricing: {prompt_cost} prompt, {completion_cost} completion")
+                
+                # Add description if available and not too long
+                description = model.get('description', '')
+                if description and len(description) <= 100:
+                    print(f"Description: {description}")
+                elif description:
+                    print(f"Description: {description[:97]}...")
+                
+                print("-" * 70)
+        else:
+            # Simple list of model IDs only
+            print(f"Available OpenRouter Models with Image Support ({len(image_models)} total):")
+            for model in image_models:
+                model_id = model.get('id', 'Unknown')
+                print(model_id)
+            
+    except Exception as e:
+        print(f"Error fetching models: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def main():
     """Main function to handle command line arguments and process the image."""
-    # Check if config file exists before parsing arguments
-    config_path = os.path.expanduser("~/.glimpse_cfg")
-    if not os.path.exists(config_path):
-        print(f"Error: Config file not found at {config_path}", file=sys.stderr)
-        print("\nPlease create a config file with your OpenRouter API key:", file=sys.stderr)
-        print("\n[openrouter]\napi_key = your_api_key_here\n", file=sys.stderr)
-        print("Optional settings:\nmodel = google/gemini-2.5-flash\ntemperature = 0.4\n", file=sys.stderr)
-        print("Run 'glimpse.py --help' for more information on command-line options.", file=sys.stderr)
-        sys.exit(1)
-        
     parser = argparse.ArgumentParser(description="Analyze images using OpenRouter API.")
     parser.add_argument(
         "image_path", 
+        nargs='?',
         type=str, 
         help="Path to the image file (JPG or PNG)"
     )
@@ -156,8 +280,43 @@ def main():
         type=float,
         help="Override the temperature value from config (0.0 to 1.0, lower is more deterministic)"
     )
+    parser.add_argument(
+        "--list-models", 
+        action='store_true', 
+        help="List all available OpenRouter models with image support"
+    )
+    parser.add_argument(
+        "--list-models-with-details", 
+        action='store_true', 
+        help="List all available OpenRouter models with image support and detailed information"
+    )
     
     args = parser.parse_args()
+    
+    # Handle --list-models commands
+    if args.list_models:
+        list_models(detailed=False)
+        sys.exit(0)
+    
+    if args.list_models_with_details:
+        list_models(detailed=True)
+        sys.exit(0)
+    
+    # Check if image_path is provided for analysis
+    if not args.image_path:
+        print("Error: Image path is required for analysis.", file=sys.stderr)
+        print("Use --help for usage information or --list-models to see available models.", file=sys.stderr)
+        sys.exit(1)
+    
+    # Check if config file exists
+    config_path = os.path.expanduser("~/.glimpse_cfg")
+    if not os.path.exists(config_path):
+        print(f"Error: Config file not found at {config_path}", file=sys.stderr)
+        print("\nPlease create a config file with your OpenRouter API key:", file=sys.stderr)
+        print("\n[openrouter]\napi_key = your_api_key_here\n", file=sys.stderr)
+        print("Optional settings:\nmodel = google/gemini-2.5-flash\ntemperature = 0.4\n", file=sys.stderr)
+        print("Run 'glimpse.py --help' for more information on command-line options.", file=sys.stderr)
+        sys.exit(1)
     
     # Validate image path
     image_path = Path(args.image_path)
