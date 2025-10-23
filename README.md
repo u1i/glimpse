@@ -2,6 +2,8 @@
 
 A command-line tool for analyzing images using OpenRouter API with multimodal models.
 
+3G-CLI Suite: [Glean](https://github.com/u1i/glean) (text analysis) | [Glimpse](https://github.com/u1i/glimpse) (image analysis) | [Graft](https://github.com/u1i/graft) (image generation and editing)
+
 ## Installation
 
 1. Clone this repository
